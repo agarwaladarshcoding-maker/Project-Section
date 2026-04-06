@@ -1,0 +1,15 @@
+{
+    "portfolio_name": "Quant_Study_01",
+    "tickers": [
+        "AAPL", "MSFT", "GOOGL", "NVDA", "AMD",
+        "JPM", "BAC", "V", "MA",
+        "JNJ", "PFE", "UNH", "MRK",
+        "PG", "KO", "WMT", "COST",
+        "XOM", "CVX", "CAT"
+    ],
+    "simulation_settings": {
+        "num_portfolios": 5000,
+        "risk_free_rate": 0.04,
+        "time_period": "1y"
+    }
+}
