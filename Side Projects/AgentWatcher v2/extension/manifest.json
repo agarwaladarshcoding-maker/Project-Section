@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "AgentWatch",
+  "version": "1.0",
+  "description": "Universal Agent Notifier. Tracks AI agents and syncs to a local Daemon.",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "notifications"
+  ],
+  "host_permissions": [
+    "ws://localhost:7799/*",
+    "ws://127.0.0.1:7799/*",
+    "ws://localhost:7800/*",
+    "ws://127.0.0.1:7800/*",
+    "ws://localhost:7801/*",
+    "ws://127.0.0.1:7801/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://www.perplexity.ai/*",
+        "https://grok.x.ai/*",
+        "https://chat.mistral.ai/*",
+        "https://*.antigravity.ai/*",
+        "https://cline.bot/*",
+        "https://github.com/copilot/*",
+        "https://*.cursor.sh/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

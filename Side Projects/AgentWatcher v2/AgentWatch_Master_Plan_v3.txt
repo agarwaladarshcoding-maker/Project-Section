@@ -1,0 +1,877 @@
+
+
+AgentWatch
+Universal AI Agent Notification & Interrupt System
+Master Architecture Plan  ·  v3.0
+
+🎯  What this document is
+A complete system architecture plan for AgentWatch — written to be fed directly to AI coding
+agents (Antigravity, Gemini, Claude) as build prompts. Each section ends with ready-to-use
+prompts. Read it fully before starting any phase.
+
+
+ 
+1. The Problem We Are Solving
+AI agents are becoming the primary way developers get work done. You give an agent a task — build a feature, refactor a module, research a topic — and then you go do something else while it works. The problem is simple and painful:
+
+😤  The Pain
+The agent gets stuck, needs a decision, hits a permission gate, or finishes —
+and you have absolutely no idea because you switched to another app.
+You end up checking manually, missing it for hours, or babysitting the terminal.
+Every AI tool traps its notifications inside itself. There is no universal layer.
+
+AgentWatch solves this by sitting outside every tool, watching passively, and delivering a native OS-level notification the moment anything needs your attention — wherever you are, whatever you are doing.
+
+2. What AgentWatch Is
+AgentWatch is a lightweight, local-first background daemon for macOS (and later Windows and Linux) that:
+
+	•	Watches AI agents running anywhere — browser tabs, Mac desktop apps, CLI terminals, IDEs
+	•	Reads the full message content AND available UI buttons from whatever the agent outputs
+	•	Uses a local offline ML classifier to understand the message and decide what type of event it is
+	•	Mirrors the agent's own buttons into a native macOS OS-level notification popup
+	•	Lets you respond, approve, deny, or reply directly from the notification without switching apps
+	•	Tracks the full history of every notification locally for future reference
+	•	Works with zero cooperation from the tool being watched — fully passive observation
+
+🔑  Key Principles
+Zero Integration  —  No API keys, no tool cooperation, no wrappers to remember to type.
+Fully Local  —  Classifier runs offline. No data leaves your machine. Ever.
+Mirror, Don't Invent  —  Buttons in the popup mirror what the tool shows. We don't guess.
+Native OS  —  Popups pierce through fullscreen apps using real macOS Cocoa APIs.
+Extensible  —  Adding a new tool is a config change, not a code change.
+
+ 
+3. How It Works — The Full Flow
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    DETECTION LAYER                             │
+│  Chrome Ext  │  Mac Accessibility API  │  Shell Plugin  │  Logs│
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  raw payload: { text, buttons, url }
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  LOCAL ML CLASSIFIER                           │
+│  Reads: full message text + buttons present + UI context       │
+│  Outputs: event_type + confidence + suggested_buttons          │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               POPUP ENGINE (notify_mac.py)                     │
+│  Builds native macOS banner using PyObjC / Cocoa               │
+│  Mirrors agent buttons → OS action buttons                     │
+│  Reply type → inline text box in banner                        │
+│  Show type → AppleScript deep-nav to exact tab/window          │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  user response
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  RETURN PIPE                                   │
+│  Injects user reply back into agent DOM / terminal             │
+│  Logs event to local notification history (SQLite)             │
+└─────────────────────────────────────────────────────────────────┘
+
+3.1 The Classifier — What It Reads
+The classifier does NOT just look at keywords. It reads three signals together to make a decision:
+
+Signal
+What It Is
+Example
+Full message text
+The complete text the agent output
+"Do you want me to delete the auth module and replace it with JWT?"
+Buttons present
+All UI buttons visible in the agent interface
+["Proceed", "Cancel", "Show Plan"]
+UI context
+Any label, heading, or status text nearby
+"Action Required" or "Task Complete"
+
+From these three signals combined, the classifier outputs:
+	•	event_type — what kind of event this is (see Section 4)
+	•	confidence — how sure the model is (0.0 to 1.0)
+	•	suggested_buttons — which buttons to show in the OS popup
+	•	truncated_preview — last 15-20 words for the OS banner title
+
+⚠️  Priority Fallback Rule
+When classifier confidence is below 0.75 between two types, always pick the higher-priority one.
+It is always better to over-alert the user than to silently miss something important.
+Priority order (highest first): ERROR → BLOCKED → PERMISSION → LIMIT → DECISION → RECOMMEND → COMPLETED
+
+ 
+4. Event Types & Popup Behaviour
+The system is not limited to exactly 7 types. If new patterns emerge during development, types can be added. For now these are the defined types, ordered by priority:
+
+P1 — ERROR  🔴
+Agent crashed, threw an exception, or hit an unrecoverable failure.
+Property
+Value
+Auto-dismiss
+Never
+Sound
+Yes — critical alert
+Buttons
+View Logs  |  Retry  |  Dismiss
+Banner stays on top
+Yes
+
+P2 — BLOCKED  🔴
+Agent is stuck waiting and cannot continue without human input. Different from an error — the agent is alive but frozen.
+Property
+Value
+Auto-dismiss
+Never
+Sound
+Yes
+Buttons
+View  |  Unblock  |  Dismiss
+Banner stays on top
+Yes
+
+P3 — PERMISSION  🔴
+Agent is about to take an action and needs your approval first. Buttons are mirrored directly from the agent UI.
+Property
+Value
+Auto-dismiss
+Never
+Sound
+Yes
+Buttons
+Mirrored from agent  (e.g. Allow / Deny / Show Plan)
+Banner stays on top
+Yes
+
+P4 — LIMIT  🟠
+API rate limit, token quota, or usage cap has been hit.
+Property
+Value
+Auto-dismiss
+Never
+Sound
+Soft chime
+Buttons
+View  |  Dismiss
+Banner stays on top
+No
+
+P5 — DECISION  🟡
+Agent is asking a question mid-task. Requires your typed reply to continue. This is the most complex popup — it shows a text input.
+Property
+Value
+Auto-dismiss
+Never
+Sound
+Soft chime
+Buttons
+Reply button → opens inline text box with last 15-20 words of context above it
+Return pipe
+User reply is injected back into the agent input field
+
+P6 — RECOMMEND  🟡
+Agent is flagging something non-blocking — a suggestion, a warning, an observation.
+Property
+Value
+Auto-dismiss
+15 seconds
+Sound
+None
+Buttons
+View  |  Dismiss
+Banner stays on top
+No
+
+P7 — COMPLETED  🟢
+Task finished successfully. Gentle notification. The Follow Up button lets you continue the conversation without switching apps.
+Property
+Value
+Auto-dismiss
+10 seconds
+Sound
+Gentle success chime
+Buttons
+Follow Up  |  Show  |  Dismiss
+Follow Up
+Expands to text box with 3-4 line summary of what was done
+
+📌  Button Mirroring Rule
+For PERMISSION and BLOCKED types, buttons in the OS popup must mirror the agent UI exactly.
+The Chrome extension scrapes button text from the DOM and passes it in the payload.
+The popup engine receives this array and renders them as actionable OS buttons.
+The user clicks a button in the OS popup → that same button is programmatically clicked in the browser.
+
+ 
+5. Detection Layers
+AgentWatch uses four passive detection layers. The user sets each up once. After that, everything is automatic.
+
+Layer 1 — Chrome Extension (Browser Tools)
+Covers all browser-based AI agents. For Phase 1, targets the top 10 most-used tools. Will expand later.
+
+Phase 1 Target Tools (Top 10):
+Tool
+URL Pattern
+Notes
+ChatGPT
+chat.openai.com
+Most popular — highest priority
+Claude.ai
+claude.ai
+Anthropic's own interface
+Gemini
+gemini.google.com
+Google's agent
+Perplexity
+perplexity.ai
+Research agent
+Cursor
+cursor.sh / IDE
+Also covered by log watcher
+GitHub Copilot
+github.com / IDE
+Copilot chat interface
+Grok
+grok.x.ai
+xAI agent
+Mistral Le Chat
+chat.mistral.ai
+Mistral's interface
+Antigravity
+app.antigravity.ai
+Primary development tool
+Cline (web)
+cline web interface
+Agentic coding tool
+
+How the Extension Works:
+	•	MutationObserver watches the DOM for new agent output
+	•	Waits for agent to finish typing — detects by: Stop button disappearing OR 1500ms debounce with no new text
+	•	Scrapes: full message text, all button labels, current tab URL, page title
+	•	Packages into JSON payload and sends to Core via WebSocket on localhost:7799
+	•	Also listens for WebSocket messages back from Core to auto-click buttons or inject text into input fields
+	•	One extension manifest covers all 10 tools via URL pattern matching
+
+🐛  Known Extension Issue to Design Around
+The Show button must navigate to the EXACT tab, not just the domain homepage.
+Solution: Store the full tab URL + tab ID in every payload.
+On Show click: use chrome.tabs.update({ active: true }) with stored tabId, then bring window to front.
+Do NOT use window.location or simple URL matching — these lose the specific tab.
+
+Layer 2 — Mac Accessibility API (Native Desktop Apps)
+Covers Antigravity Mac app and any other native Mac AI application. Uses macOS AXObserver.
+
+	•	Registers AXObserver callbacks on the target application's UI elements
+	•	Watches for AXValueChanged and AXUIElementDestroyed notifications on text areas and buttons
+	•	Reads AXValue (text content) and AXTitle (button labels) from accessibility tree
+	•	Sends same JSON payload format as Chrome Extension to Core WebSocket
+	•	Target apps configured in tools.json — add any Mac app by bundle ID, no code change
+
+🐛  Known Mac App Issue to Design Around
+AXObserver requires Accessibility permission in System Preferences → Privacy → Accessibility.
+The app must request this on first launch with a clear prompt explaining why.
+Without it, all AX calls return silently empty — no error, no crash, just nothing.
+Always check AXIsProcessTrustedWithOptions() on startup and show a setup guide if false.
+
+Layer 3 — Shell Plugin (Terminal & CLI Tools)
+Covers Ollama, Claude Code CLI, Aider, and any terminal-based agent. One-time .zshrc setup.
+
+	•	A 3-line zsh function wraps command output and pipes it to Core via HTTP POST
+	•	User adds one line to .zshrc — done forever, no commands to remember
+	•	Captures stdout and stderr from any command the function wraps
+	•	PowerShell equivalent for Windows (Phase 5)
+
+Layer 4 — Log File Watcher (IDEs & Desktop Apps)
+Covers VS Code with Cline/Copilot, Cursor, and any tool that writes agent output to log files.
+
+	•	Uses Python watchdog library to tail log file paths defined in tools.json
+	•	Reads new lines as they appear, sends to classifier pipeline
+	•	Add any new tool: one line in tools.json with the log path — no code change
+
+ 
+6. System Architecture
+
+6.1 The Core Daemon — Threading Model
+This is the most critical architectural decision. Getting this wrong causes the popup system to deadlock or crash. The solution is a strict dual-loop model:
+
+🏗️  Dual-Loop Concurrency Model
+Thread 1 (Background)  —  Runs asyncio event loop + WebSocket server on port 7799.
+                           Handles all network I/O: receives payloads, sends replies.
+
+Thread 2 (Main)        —  Runs PyObjC macOS AppHelper.runEventLoop().
+                           Handles all UI: renders popups, handles button clicks.
+
+Bridge A (Net → UI)    —  performSelectorOnMainThread() sends payloads from Thread 1 to Thread 2.
+Bridge B (UI → Net)    —  asyncio_loop.call_soon_threadsafe() sends replies from Thread 2 to Thread 1.
+
+CRITICAL: Never call PyObjC UI methods from the background thread. Always use Bridge A.
+
+6.2 The Popup Engine — PyObjC Rules
+The native macOS popup layer uses PyObjC to call Cocoa APIs directly. Several strict rules must be followed:
+
+🐛  PyObjC KVC Crash — The Main Known Issue
+NSUnknownKeyException crashes occur when setting custom properties on NSUserNotification.
+RULE: Only use KVC-compliant properties: title, subtitle, informativeText,
+      hasActionButton, actionButtonTitle, hasReplyButton, otherButtonTitle.
+RULE: Never set additionalActions via KVC — use _additionalActions with underscore prefix
+      only if absolutely required, and test on your exact macOS version first.
+SAFE ALTERNATIVE: Use UNUserNotificationCenter (modern API) for macOS 10.14+ —
+      it is more stable and supports rich actions without KVC pitfalls.
+
+	•	Use UNUserNotificationCenter (UserNotifications framework) as primary popup API
+	•	Fall back to NSUserNotification only for macOS versions below 10.14
+	•	Request notification permissions on first launch — check UNAuthorizationStatus before every popup
+	•	Smart truncation: extract last 15-20 words of agent message for banner subtitle
+	•	Full message stored in history DB — accessible via Show button
+
+6.3 The Show Button — Deep Navigation
+The Show button must take the user to the exact tab/window/app where the agent is running. This is a common failure point.
+
+🐛  Show Button Known Issue
+Simple AppleScript 'open location URL' takes user to home screen, not to the specific tab.
+CORRECT SOLUTION for Chrome tabs:
+  1. Store tabId and windowId in every payload from the Chrome extension.
+  2. On Show click, send a WebSocket message back to the extension.
+  3. Extension calls: chrome.windows.update(windowId, {focused: true})
+                  then: chrome.tabs.update(tabId, {active: true})
+  This reliably focuses the exact tab even across Desktop Spaces.
+
+CORRECT SOLUTION for Mac desktop apps:
+  Use NSRunningApplication.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+
+6.4 The Return Pipe — Injecting Replies
+When the user types a reply in the DECISION popup, that text must be sent back to the agent.
+
+	•	Core sends reply text via WebSocket to Chrome extension
+	•	Extension content.js finds the agent input field using tool-specific selectors
+	•	Injects text using InputEvent with 'input' type — NOT direct .value assignment (React ignores it)
+	•	Then programmatically clicks the submit/send button
+	•	For terminal tools: writes reply to a named pipe or PTY stdin
+
+🐛  Return Pipe Known Issue
+Direct element.value = 'text' does not work for React-based UIs (ChatGPT, Claude, etc.).
+CORRECT: Use Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, text)
+         then dispatch: new Event('input', { bubbles: true })
+         This triggers React's synthetic event system correctly.
+
+6.5 Notification History — Local Storage
+Every notification is logged locally for future reference. No cloud. No sync.
+
+	•	SQLite database at ~/.agentwatch/history.db
+	•	Schema: id, timestamp, tool, event_type, full_message, buttons, user_response, resolved
+	•	Accessible via tray icon → History menu
+	•	Useful for reviewing what agents did while you were away
+
+6.6 File Structure
+agentwatch/
+├── core/
+│   ├── main.py                  ← daemon entry point, dual-loop threading
+│   ├── websocket_server.py       ← asyncio WebSocket on port 7799
+│   ├── log_watcher.py            ← watchdog-based log file tailing
+│   ├── terminal_listener.py      ← receives from shell plugin
+│   ├── mac_app_watcher.py        ← AXObserver Accessibility API
+│   ├── classifier.py             ← loads + runs local ML model
+│   ├── popup_router.py           ← decides popup type, calls platform layer
+│   └── history.py               ← SQLite notification history
+├── classifier/
+│   ├── generate_training_data.py ← synthetic data generator
+│   ├── train.py                  ← trains scikit-learn model
+│   ├── evaluate.py               ← accuracy testing
+│   ├── model/                    ← saved trained model files
+│   └── data/                     ← training CSV files
+├── platform/
+│   ├── notify_mac.py             ← PyObjC / UNUserNotificationCenter
+│   ├── notify_windows.py         ← Windows toast (Phase 5)
+│   └── notify_linux.py           ← libnotify (Phase 5)
+├── extension/
+│   ├── manifest.json             ← Chrome extension manifest v3
+│   ├── content.js                ← DOM scraping + reply injection
+│   ├── background.js             ← WebSocket bridge + tab management
+│   └── tools/                    ← per-tool DOM selectors
+│       ├── chatgpt.js
+│       ├── claude.js
+│       └── ...
+├── shell/
+│   ├── agentwatch.zsh            ← zsh plugin (one-time .zshrc setup)
+│   └── agentwatch.ps1            ← PowerShell (Phase 5)
+└── config/
+    └── tools.json                ← tool registry: log paths, app bundle IDs, URLs
+
+ 
+7. Known Issues & Solutions Catalogue
+These are issues encountered in previous build attempts. Every solution here is pre-designed to prevent hitting the same walls again.
+
+Issue
+Root Cause
+Correct Solution
+Popups not appearing
+Notification permission not granted OR PyObjC called from wrong thread
+Check UNAuthorizationStatus at startup. Only call UI from main thread via performSelectorOnMainThread
+KVC crash on NSUserNotification
+Setting non-KVC-compliant properties directly
+Use UNUserNotificationCenter (modern API). Avoid _additionalActions unless tested on exact OS version
+Show button goes to homepage
+AppleScript 'open URL' navigates to domain root
+Store tabId+windowId in payload. Use chrome.tabs.update(tabId,{active:true}) from extension
+Reply injection not working
+Direct .value= assignment bypasses React synthetic events
+Use native input setter + dispatch input Event with bubbles:true
+MutationObserver fires mid-typing
+Triggers on every DOM change while agent is still streaming
+Watch for Stop button disappearing OR use 1500ms debounce after last text change
+AXObserver detects nothing
+Accessibility permission not granted in System Prefs
+Check AXIsProcessTrustedWithOptions() on startup. Show setup guide if false
+WebSocket port conflict
+Port 7799 already in use by another process
+Check port availability on startup. Fall back to 7800, 7801 automatically
+Classifier wrong type
+Low confidence between two similar types
+Apply priority fallback rule. Log all low-confidence events for training data improvement
+Popup appears then immediately crashes
+PyObjC delegate object gets garbage collected
+Keep a strong reference to the delegate object at module level — not just inside a function
+Extension not detecting tool
+Tool uses shadow DOM or iframe for its UI
+Use document.querySelectorAll with piercing or add iframe content script in manifest
+
+ 
+8. Build Phases
+
+Phase 0 — The Classifier
+Build the local ML classifier that reads agent messages and decides event type + buttons.
+
+	•	Write generate_training_data.py — synthetic examples for all event types, all tool contexts
+	•	Each example has: message_text, buttons_present, ui_context, event_type label
+	•	Generate minimum 150 examples per type (1050+ total)
+	•	Write train.py — TF-IDF vectorizer + scikit-learn classifier (start with LinearSVC)
+	•	Write evaluate.py — accuracy report, confusion matrix, low-confidence examples
+	•	Target: >88% accuracy before moving to Phase 1
+	•	Deliverable: classifier/model/ with working saved model + vectorizer
+
+Phase 1 — Core Daemon + Chrome Extension (Browser Tools)
+End-to-end working system for browser-based tools. First working proof of concept.
+
+	•	Build dual-loop threading daemon in core/main.py
+	•	Build WebSocket server in websocket_server.py
+	•	Build Chrome extension with MutationObserver + debounce for ChatGPT first
+	•	Build notify_mac.py using UNUserNotificationCenter
+	•	Build popup_router.py — receives classified payload, calls correct popup type
+	•	Build Show button deep-navigation using tabId/windowId
+	•	Test full loop: ChatGPT output → Extension → Core → Classifier → Popup → Show
+	•	Deliverable: Working popup for ChatGPT. Then add remaining 9 tools.
+
+Phase 2 — Mac Desktop App Watcher (Antigravity App)
+Extend detection to Antigravity's native Mac application using Accessibility API.
+
+	•	Build mac_app_watcher.py with AXObserver on Antigravity bundle ID
+	•	Request + verify Accessibility permission on first run
+	•	Map AX elements to same JSON payload format as Chrome extension
+	•	Add app bundle IDs to tools.json config — no code change needed for new apps
+	•	Deliverable: Antigravity desktop app triggers same popup pipeline as browser
+
+Phase 3 — Terminal + CLI Tools
+Extend detection to Ollama, Claude Code CLI, Aider, and any terminal agent.
+
+	•	Write agentwatch.zsh — zsh function that wraps CLI output
+	•	Build terminal_listener.py — receives piped output from shell plugin
+	•	Test with Ollama and Claude Code CLI
+	•	Deliverable: Run Ollama in terminal, receive Mac popup on completion/error
+
+Phase 4 — Log File Watcher + Config System
+Add any future tool via config only. No code change ever needed.
+
+	•	Build log_watcher.py using watchdog library
+	•	Finalize tools.json schema: log_path, app_bundle_id, url_pattern fields
+	•	Test with VS Code Cline extension log output
+	•	Deliverable: Any tool added to tools.json is automatically watched
+
+Phase 5 — Cross-Platform (Windows + Linux)
+Same experience on Windows and Linux. Core logic unchanged — only platform notify layer differs.
+
+	•	Build notify_windows.py — Windows toast notifications via win10toast or plyer
+	•	Build notify_linux.py — libnotify via notify-send
+	•	Write agentwatch.ps1 — PowerShell shell plugin
+	•	Test all detection layers on both platforms
+
+Phase 6 — Mac Tray App + Notification History
+Persistent presence. Full history. Quick access to everything AgentWatch has seen.
+
+	•	Mac tray icon with active agent count badge
+	•	History view — timeline of every agent event with full message and response
+	•	Status indicators per tool — green/red/idle
+	•	Deliverable: Tray icon that shows live state of all watched agents
+
+Phase 7 — Polish, Settings & Mobile Push
+Production quality. Configurable. Works even when your laptop is closed.
+
+	•	Settings UI — toggle tools, adjust timeouts, set notification sounds
+	•	Auto-start on login — launchd plist on Mac, Task Scheduler on Windows
+	•	Mobile push — optional phone notifications via ntfy.sh (self-hosted, local network)
+	•	Classifier improvement loop — review low-confidence events, retrain on real data
+	•	Deliverable: Feels like a finished product
+
+ 
+9. Tech Stack
+
+Component
+Technology
+Why
+Core daemon
+Python 3.11+
+Cross-platform, asyncio, great ML + OS libs
+Mac popup layer
+PyObjC + UNUserNotificationCenter
+True native macOS banners that pierce fullscreen
+Chrome extension
+Vanilla JS (Manifest V3)
+No dependencies, fast, works on all Chromium browsers
+WebSocket bridge
+Python websockets library, port 7799
+Low-latency, local-only, bidirectional
+Classifier
+scikit-learn (TF-IDF + LinearSVC)
+Offline, <20MB, fast inference, trainable
+Accessibility watcher
+PyObjC + AXObserver
+macOS native, passive, no tool cooperation
+Log watcher
+Python watchdog
+Cross-platform file tail, reliable
+History storage
+SQLite via Python sqlite3
+Zero dependencies, local, fast
+Shell plugin
+zsh function + PowerShell
+One-time setup, zero runtime overhead
+Tray app
+rumps (Mac) / pystray (cross-platform)
+Lightweight, native OS tray icons
+
+10. One-Time User Setup
+After install, the user does these steps once and never thinks about it again:
+
+	•	Install AgentWatch — python main.py — app appears in Mac tray
+	•	Grant Notification permission when prompted on first launch
+	•	Grant Accessibility permission in System Preferences (for Mac app watching)
+	•	Install Chrome extension from extension/ folder — covers all 10 browser tools
+	•	Add one line to ~/.zshrc — covers all terminal and CLI tools
+
+Total setup time: under 5 minutes. After that: fully automatic forever.
+
+ 
+11. Build Prompts
+Feed these prompts directly to Antigravity or Gemini. Each prompt is self-contained and references this document. Attach this document when sending any prompt.
+
+PHASE 0 — CLASSIFIER
+
+PROMPT — Antigravity — Phase 0: Build the Classifier
+You are building Phase 0 of AgentWatch (see attached document).
+
+Goal: Build a local offline ML classifier that reads an AI agent message
+and classifies it into an event type with associated button suggestions.
+
+IMPORTANT CONTEXT:
+- The classifier reads THREE signals: full message text + buttons present + UI context label
+- It outputs: event_type, confidence score, suggested_buttons list, truncated_preview (15-20 words)
+- Event types defined in Section 4 of the document (ERROR, BLOCKED, PERMISSION, LIMIT, DECISION, RECOMMEND, COMPLETED)
+- If confidence < 0.75 between two types, pick higher priority (Section 4 priority order)
+- Target accuracy: >88% before Phase 1 begins
+
+DO THIS IN ORDER. Show me each file before running it. Wait for approval.
+
+STEP 1: Create the full project folder structure from Section 6.6 of the document.
+Show me the structure and wait for approval.
+
+STEP 2: Write classifier/generate_training_data.py
+- Generates synthetic training examples for all event types
+- Each example: message_text, buttons_present (comma-separated), ui_context, event_type
+- Cover all tool contexts: ChatGPT, Claude.ai, Antigravity, Ollama CLI, VS Code
+- Minimum 150 examples per type (1050+ total)
+- Output to classifier/data/training_data.csv
+Show me the script. Do not run it yet. Wait for my approval.
+
+STEP 3 (after approval): Run the generator, show me a sample of 5 rows per type.
+
+STEP 4: Write classifier/train.py
+- TF-IDF vectorizer on combined text+buttons+context field
+- LinearSVC classifier
+- Save model + vectorizer to classifier/model/
+Show me the script. Wait for approval before running.
+
+STEP 5: Write classifier/evaluate.py
+- Load trained model
+- Run on a held-out 20% test split
+- Print accuracy, per-class precision/recall, confusion matrix
+- List all predictions below 0.75 confidence for review
+
+Do not touch any other phase. One step at a time. Ask if unclear.
+
+PHASE 1 — CORE + CHROME EXTENSION
+
+PROMPT — Antigravity — Phase 1A: Core Daemon & WebSocket Server
+You are building Phase 1A of AgentWatch (see attached document).
+The classifier from Phase 0 is complete and saved in classifier/model/.
+
+Goal: Build the Core daemon with dual-loop threading and WebSocket server.
+
+CRITICAL ARCHITECTURE — read Section 6.1 carefully:
+- Thread 1 (background): asyncio event loop + WebSocket server on port 7799
+- Thread 2 (main): PyObjC macOS AppHelper.runEventLoop()
+- Bridge Net→UI: performSelectorOnMainThread
+- Bridge UI→Net: asyncio_loop.call_soon_threadsafe
+- NEVER call PyObjC UI methods from the background thread
+
+BUILD IN ORDER. Show each file before writing. Wait for approval.
+
+STEP 1: core/websocket_server.py
+- asyncio WebSocket server on port 7799
+- Check if port is in use on startup; fall back to 7800, 7801 if needed
+- Receives JSON payload: { text, buttons, url, tabId, windowId, tool }
+- Calls classifier.py with payload, gets event_type + suggested_buttons back
+- Passes result to popup_router.py via thread-safe bridge
+Show me the file. Wait for approval.
+
+STEP 2: core/classifier.py  
+- Loads saved model from classifier/model/
+- Input: { text, buttons, ui_context }
+- Output: { event_type, confidence, suggested_buttons, truncated_preview }
+- Implements priority fallback if confidence < 0.75
+
+STEP 3: core/popup_router.py
+- Receives classified event
+- Calls correct popup function from platform/notify_mac.py based on event_type
+- Passes button list, truncated preview, full message, tabId, windowId
+
+STEP 4: core/main.py
+- Starts both threads using the dual-loop model from Section 6.1
+- Handles graceful shutdown on Ctrl+C or SIGTERM
+
+STEP 5: core/history.py
+- SQLite at ~/.agentwatch/history.db
+- Schema: id, timestamp, tool, event_type, full_message, buttons, user_response, resolved
+- Functions: log_event(), get_recent(n=50), mark_resolved(id)
+
+Do not build the popup layer yet. That is Phase 1B. One step at a time.
+
+PROMPT — Antigravity — Phase 1B: Native Mac Popup Layer
+You are building Phase 1B of AgentWatch (see attached document).
+Phase 1A core daemon is complete.
+
+Goal: Build the native macOS popup layer using UNUserNotificationCenter (NOT NSUserNotification).
+Read Section 6.2 carefully — the KVC crash issue is documented there.
+
+CRITICAL RULES:
+- Use UNUserNotificationCenter (UserNotifications framework) — NOT NSUserNotification
+- NSUserNotification causes KVC crashes. Do not use it.
+- Keep a strong module-level reference to the delegate — it will be garbage collected otherwise
+- Only call popup functions from the main thread (Thread 2 in the dual-loop model)
+- Read Section 7 Known Issues before writing any code
+
+BUILD IN ORDER. Show each file. Wait for approval.
+
+STEP 1: platform/notify_mac.py
+Build separate functions for each event type:
+  show_error_popup(preview, full_message, tabId, windowId)
+  show_blocked_popup(preview, buttons, tabId, windowId)
+  show_permission_popup(preview, buttons, tabId, windowId)  ← mirror agent buttons exactly
+  show_limit_popup(preview, tabId, windowId)
+  show_decision_popup(preview, context_lines, tabId, windowId)  ← has reply text box
+  show_recommend_popup(preview, tabId, windowId)  ← auto-dismisses 15s
+  show_completed_popup(preview, tabId, windowId)  ← has Follow Up button
+
+STEP 2: The Show Button
+- On Show/View click: send WebSocket message back to extension with { action: 'focus_tab', tabId, windowId }
+- Do NOT use AppleScript URL navigation — it goes to homepage
+- Use the WebSocket return pipe to the extension, which calls chrome.tabs.update(tabId, {active:true})
+  and chrome.windows.update(windowId, {focused:true})
+- See Section 6.3 and Section 7 for the known issue and correct solution
+
+STEP 3: The Reply Pipe (for DECISION type)
+- User types reply in the inline text box
+- On send: pass text to Core via asyncio_loop.call_soon_threadsafe
+- Core sends via WebSocket to extension: { action: 'inject_reply', text, tabId }
+- See Section 6.4 for the React input injection solution — do NOT use .value= directly
+
+Test each popup type manually before proceeding.
+
+PROMPT — Antigravity — Phase 1C: Chrome Extension (ChatGPT first)
+You are building Phase 1C of AgentWatch (see attached document).
+The Core daemon and popup layer from 1A and 1B are complete.
+
+Goal: Build the Chrome extension. Start with ChatGPT only. Others added after ChatGPT works end-to-end.
+
+Read Section 5 Layer 1 and Section 7 carefully before writing any code.
+
+CRITICAL RULES:
+- Use Manifest V3 (not V2)
+- MutationObserver must NOT fire mid-stream — use 1500ms debounce OR detect Stop button disappearing
+- Show button MUST work via tabId/windowId — not URL navigation (see Section 6.3 Known Issue)
+- Reply injection MUST use native setter + input Event (see Section 6.4 Known Issue)
+- Store tabId and windowId in every outbound payload
+
+BUILD IN ORDER. Show each file. Wait for approval.
+
+STEP 1: extension/manifest.json
+- Manifest V3
+- Content script permissions for chat.openai.com (ChatGPT first)
+- Background service worker
+- Host permissions for localhost:7799
+
+STEP 2: extension/content.js (ChatGPT-specific first)
+- MutationObserver on ChatGPT response container
+- 1500ms debounce after last text change
+- Scrape: full message text, all button labels and text, page URL
+- Send payload: { text, buttons: [], url, tabId, windowId, tool: "chatgpt" }
+- Listen for incoming WebSocket messages:
+    { action: 'focus_tab' } → chrome.tabs.update + chrome.windows.update
+    { action: 'inject_reply', text } → native setter injection + input Event dispatch
+    { action: 'click_button', label } → find button by label text and click it
+
+STEP 3: extension/background.js
+- Maintains persistent WebSocket connection to localhost:7799
+- Routes messages between content scripts and Core
+- Handles reconnection if Core restarts
+
+STEP 4: Test full loop end-to-end
+Give ChatGPT a task. Verify: popup appears → Show button opens exact tab → reply injection works.
+Only after this passes: add the other 9 tools using the same pattern.
+
+PHASE 2 — MAC DESKTOP APP WATCHER
+
+PROMPT — Antigravity — Phase 2: Mac Accessibility API Watcher
+You are building Phase 2 of AgentWatch (see attached document).
+Phases 0 and 1 are complete.
+
+Goal: Watch native Mac desktop AI apps (primarily Antigravity Mac app) using the macOS Accessibility API.
+Read Section 5 Layer 2 and Section 7 Known Issues carefully.
+
+CRITICAL RULES:
+- Check AXIsProcessTrustedWithOptions() on startup. If false, show clear setup instructions.
+- Register AXObserver callbacks for AXValueChanged on text areas
+- Read AXValue for text content, AXTitle for button labels
+- Output same JSON payload format as Chrome extension: { text, buttons, url, tool }
+- Target app bundle IDs stored in config/tools.json — no code change to add new apps
+
+BUILD IN ORDER. Show each file. Wait for approval.
+
+STEP 1: core/mac_app_watcher.py
+- On startup: check Accessibility permission. Print setup guide if missing.
+- Load target app bundle IDs from config/tools.json
+- For each app: wait for it to launch, then register AXObserver
+- Watch AXValueChanged on all text areas and AXUIElementDestroyed on buttons
+- On change: extract text + buttons from accessibility tree
+- Debounce 1000ms before sending to classifier pipeline
+- Send same payload format as extension: { text, buttons, url, tool }
+
+STEP 2: config/tools.json update
+Add Antigravity Mac app entry:
+{ "type": "mac_app", "name": "Antigravity", "bundle_id": "ai.antigravity.app" }
+
+STEP 3: Integrate with Core
+- main.py starts mac_app_watcher in a separate thread alongside WebSocket server
+- Payloads route through same classifier + popup pipeline
+
+Test: give Antigravity desktop app a task, verify popup appears.
+
+PHASE 3 — TERMINAL & CLI
+
+PROMPT — Antigravity — Phase 3: Terminal Shell Plugin
+You are building Phase 3 of AgentWatch (see attached document).
+Phases 0, 1, and 2 are complete.
+
+Goal: Watch Ollama, Claude Code CLI, Aider, and any terminal AI agent via a zsh shell plugin.
+Read Section 5 Layer 3 carefully.
+
+STEP 1: shell/agentwatch.zsh
+- A zsh function called 'aw' that wraps any command
+- Usage: aw ollama run llama3
+- Captures stdout + stderr, sends to terminal_listener via HTTP POST to localhost:7799/terminal
+- Does not change the command's behaviour — output still appears in terminal normally
+- Install line for .zshrc: source ~/path/to/agentwatch.zsh
+
+STEP 2: core/terminal_listener.py
+- HTTP endpoint /terminal on port 7799 (alongside WebSocket server)
+- Receives: { text, tool, command }
+- Sends to classifier + popup pipeline same as other layers
+
+STEP 3: Test with Ollama
+Run: aw ollama run llama3 "build me a python script that..."
+Verify popup appears when Ollama completes or needs input.
+
+GEMINI RESEARCH PROMPTS
+
+PROMPT — Gemini — Research: PyObjC UNUserNotificationCenter
+I am building a native macOS notification system using Python and PyObjC.
+I need to use UNUserNotificationCenter (NOT NSUserNotification — it causes KVC crashes).
+
+Please research and provide:
+
+1. A complete working Python code example using PyObjC to display a native macOS banner
+   notification using UNUserNotificationCenter with:
+   - A title and body
+   - At least two action buttons (e.g. Allow / Deny)
+   - An optional reply text field (like iMessage inline reply)
+
+2. How to keep a strong reference to the UNUserNotificationCenterDelegate to prevent
+   garbage collection crashes
+
+3. How to handle the response callback when a user clicks a button or submits a reply
+
+4. The correct way to run this alongside an asyncio event loop in a separate thread
+   (I am using a dual-loop model: asyncio on Thread 1, PyObjC AppHelper on Thread 2)
+
+5. Any known issues with UNUserNotificationCenter in Python/PyObjC and their solutions
+
+Provide working, tested code. This is for macOS 12+ (Monterey and above).
+
+PROMPT — Gemini — Research: Chrome Extension Tab Deep Navigation
+I am building a Chrome Extension (Manifest V3) that needs to:
+1. Record the current tabId and windowId when content.js scrapes a page
+2. Later, when a user clicks a button in a native macOS notification, navigate Chrome to that
+   exact tab and window — even if the user has switched to a different Desktop Space
+
+Please research and provide:
+
+1. Working Manifest V3 code showing how content.js sends tabId and windowId to background.js
+2. Working background.js code using chrome.tabs.update() and chrome.windows.update() to bring
+   a specific tab to front and focus its window
+3. How to handle the case where the tab has been closed since the notification was sent
+4. How to focus a Chrome window that is on a different macOS Desktop Space
+5. Any known limitations or edge cases with cross-Space window focusing in Chrome extensions
+
+Provide complete, working Manifest V3 code examples.
+
+PROMPT — Gemini — Research: React Input Field Injection
+I am building a Chrome extension that needs to programmatically inject text into React-based
+web application input fields and trigger form submission.
+
+The standard approach of element.value = 'text' does NOT work for React apps because React
+uses synthetic events and does not detect direct property mutations.
+
+Please research and provide:
+
+1. The correct way to inject text into a React-controlled input field from a Chrome extension
+   content script (the native InputEvent approach)
+2. How to trigger React's onChange event after text injection
+3. How to programmatically click a submit button in a React app from a content script
+4. Working code examples for: ChatGPT input field, Claude.ai input field
+5. Any cases where this approach fails and alternative solutions
+
+Provide working code that has been tested on modern React apps.
+
+ 
+12. Summary
+
+AgentWatch is a universal, passive, local-first notification daemon. It watches AI agents across every tool category — browsers, Mac desktop apps, CLI terminals, IDEs — and delivers interactive OS-level notifications the moment they need you.
+
+The system is designed around three principles:
+
+	•	Mirror, don't invent — buttons in the popup mirror what the agent UI shows. The classifier reads the full message AND button signals to understand context and generate the right response options.
+	•	Passive everywhere — zero tool cooperation needed. The extension, accessibility watcher, shell plugin, and log watcher all observe silently.
+	•	Known issues solved before they occur — every major failure point from previous build attempts is documented in Section 7 with the correct solution pre-designed.
+
+Start with Phase 0. Build the classifier. Get it above 88% accuracy. Then Phase 1 — ChatGPT end-to-end. Every other tool follows the same pattern.
+
+🚀  Start Here
+Feed the Phase 0 Antigravity prompt (Section 11) along with this document to Antigravity.
+Attach this PDF/DOCX to every prompt so the agent has full context.
+Do not skip phases. Do not start Phase 1 before Phase 0 classifier hits 88%.
+When you hit a bug, check Section 7 first — it is likely already documented.
