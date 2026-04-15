@@ -1,0 +1,31 @@
+2026-04-15 12:28:19,878 - INFO - Connecting to Binance Futures Testnet...
+2026-04-15 12:28:20,069 - INFO - === Order Request Summary ===
+2026-04-15 12:28:20,069 - INFO - Symbol: BTCUSDT | Side: BUY | Type: LIMIT | Qty: 0.01
+2026-04-15 12:28:20,069 - INFO - === Order Response Details ===
+2026-04-15 12:28:20,069 - INFO - Order ID: 13036437516
+2026-04-15 12:28:20,069 - INFO - Status: NEW
+2026-04-15 12:28:20,069 - INFO - Executed Qty: 0.0000
+2026-04-15 12:28:20,069 - INFO - Avg Price: 0.00
+2026-04-15 12:28:20,069 - INFO -  SUCCESS: Order placed successfully on Testnet.
+2026-04-15 12:28:20,069 - INFO - ===============================================
+2026-04-15 12:42:45,145 - ERROR - Input Validation Failed: Side Type Out of Scope. Must be: ['BUY', 'SELL']
+2026-04-15 12:43:18,948 - INFO - Connecting to Binance Futures Testnet...
+2026-04-15 12:43:19,137 - INFO - === Order Request Summary ===
+2026-04-15 12:43:19,138 - INFO - Symbol: BTCUSDT | Side: SELL | Type: LIMIT | Qty: 0.05
+2026-04-15 12:43:19,138 - INFO - === Order Response Details ===
+2026-04-15 12:43:19,138 - INFO - Order ID: 13036463955
+2026-04-15 12:43:19,138 - INFO - Status: NEW
+2026-04-15 12:43:19,138 - INFO - Executed Qty: 0.0000
+2026-04-15 12:43:19,138 - INFO - Avg Price: 0.00
+2026-04-15 12:43:19,138 - INFO -  SUCCESS: Order placed successfully on Testnet.
+2026-04-15 12:43:19,138 - INFO - ===============================================
+2026-04-15 14:10:11,961 - INFO - Connecting to Binance Futures Testnet...
+2026-04-15 14:10:12,212 - INFO - === Order Request Summary ===
+2026-04-15 14:10:12,212 - INFO - Symbol: BTCUSDT | Side: BUY | Type: MARKET | Qty: 0.01
+2026-04-15 14:10:12,212 - INFO - === Order Response Details ===
+2026-04-15 14:10:12,212 - INFO - Order ID: 13036622327
+2026-04-15 14:10:12,212 - INFO - Status: NEW
+2026-04-15 14:10:12,212 - INFO - Executed Qty: 0.0000
+2026-04-15 14:10:12,212 - INFO - Avg Price: 0.00
+2026-04-15 14:10:12,212 - INFO -  SUCCESS: Order placed successfully on Testnet.
+2026-04-15 14:10:12,213 - INFO - ===============================================
